@@ -8,7 +8,6 @@ import type { ProgressData } from '../utils/storage';
 
 const Dashboard: React.FC = () => {
   const [progress, setProgress] = useState<ProgressData>(loadProgress);
-  const [copied, setCopied] = useState(false);
   const totalWords = getTotalWordCount();
   const completedWords = progress.completedWords.length;
   const reviewWords = progress.reviewWords.length;
@@ -17,26 +16,6 @@ const Dashboard: React.FC = () => {
   const accuracy = progress.totalAttempts > 0
     ? Math.round((progress.correctCount / progress.totalAttempts) * 100)
     : 0;
-
-  const shareUrl = window.location.href;
-
-  const handleCopyLink = async () => {
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // fallback
-      const input = document.createElement('input');
-      input.value = shareUrl;
-      document.body.appendChild(input);
-      input.select();
-      document.execCommand('copy');
-      document.body.removeChild(input);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
 
   useEffect(() => {
     setProgress(loadProgress());
@@ -62,10 +41,8 @@ const Dashboard: React.FC = () => {
           transition={{ delay: 0.1 }}
         >
           <div className="stat-icon">📚</div>
-          <div className="stat-info">
-            <div className="stat-value">{completedWords}</div>
-            <div className="stat-label">已掌握单词</div>
-          </div>
+          <div className="stat-value">{completedWords}</div>
+          <div className="stat-label">已掌握单词</div>
         </motion.div>
 
         <motion.div
@@ -75,10 +52,8 @@ const Dashboard: React.FC = () => {
           transition={{ delay: 0.2 }}
         >
           <div className="stat-icon">🎯</div>
-          <div className="stat-info">
-            <div className="stat-value">{accuracy}%</div>
-            <div className="stat-label">发音正确率</div>
-          </div>
+          <div className="stat-value">{accuracy}%</div>
+          <div className="stat-label">正确率</div>
         </motion.div>
 
         <motion.div
@@ -88,10 +63,8 @@ const Dashboard: React.FC = () => {
           transition={{ delay: 0.3 }}
         >
           <div className="stat-icon">📝</div>
-          <div className="stat-info">
-            <div className="stat-value">{totalReview}</div>
-            <div className="stat-label">重点复习词</div>
-          </div>
+          <div className="stat-value">{totalReview}</div>
+          <div className="stat-label">待复习</div>
         </motion.div>
       </div>
 
@@ -127,29 +100,6 @@ const Dashboard: React.FC = () => {
           </motion.div>
         )}
       </div>
-
-      <motion.div
-        className="share-section"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.7 }}
-      >
-        <p className="share-label">🔗 分享链接给其他设备</p>
-        <div className="share-input-group">
-          <input
-            className="share-input"
-            value={shareUrl}
-            readOnly
-            onClick={(e) => (e.target as HTMLInputElement).select()}
-          />
-          <button
-            className={`share-copy-btn ${copied ? 'copied' : ''}`}
-            onClick={handleCopyLink}
-          >
-            {copied ? '✅ 已复制' : '📋 复制'}
-          </button>
-        </div>
-      </motion.div>
     </div>
   );
 };

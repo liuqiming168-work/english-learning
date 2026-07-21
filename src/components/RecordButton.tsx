@@ -16,7 +16,6 @@ const RecordButton: React.FC<RecordButtonProps> = ({
 }) => {
   const [countdown, setCountdown] = useState(3);
 
-  // 录音时显示倒计时
   useEffect(() => {
     if (isListening) {
       setCountdown(3);
@@ -37,7 +36,7 @@ const RecordButton: React.FC<RecordButtonProps> = ({
     return (
       <div className="record-unsupported">
         <p>⚠️ 您的浏览器不支持语音识别</p>
-        <p className="hint">请使用 <strong>Chrome 浏览器</strong> 打开此应用</p>
+        <p className="hint">请使用 <strong>Chrome 或 Edge 浏览器</strong></p>
       </div>
     );
   }
@@ -47,19 +46,19 @@ const RecordButton: React.FC<RecordButtonProps> = ({
       className={`btn-record ${isListening ? 'listening' : ''}`}
       onClick={onRecord}
       disabled={disabled || isListening}
-      whileTap={{ scale: 0.9 }}
-      whileHover={{ scale: 1.05 }}
+      whileTap={{ scale: 0.92 }}
+      whileHover={{ scale: 1.03 }}
     >
       {isListening ? (
         <>
           <motion.span
             className="mic-icon"
-            animate={{ scale: [1, 1.3, 1] }}
+            animate={{ scale: [1, 1.2, 1] }}
             transition={{ repeat: Infinity, duration: 0.8 }}
           >
             🎤
           </motion.span>
-          <span>正在听你说... {countdown > 0 ? `${countdown}s` : ''}</span>
+          <span>正在听... {countdown > 0 ? `${countdown}s` : ''}</span>
         </>
       ) : (
         <>
