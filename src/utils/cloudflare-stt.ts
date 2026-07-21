@@ -19,7 +19,7 @@ function getSupportedMimeType(): string {
 }
 
 // 使用 MediaRecorder 录制音频
-export function startRecording(): Promise<{ stop: () => Promise<Blob> }> {
+export function startRecording(): Promise<{ stop: () => Promise<Blob>; mimeType: string }> {
   return navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
     const mimeType = getSupportedMimeType();
     const mediaRecorder = new MediaRecorder(stream, { mimeType });
@@ -51,7 +51,7 @@ export function startRecording(): Promise<{ stop: () => Promise<Blob> }> {
       });
     };
 
-    return { stop };
+    return { stop, mimeType };
   });
 }
 
@@ -66,24 +66,36 @@ export async function transcribeAudio(audioBlob: Blob): Promise<{ text: string; 
     : 'webm';
   formData.append('file', audioBlob, `audio.${ext}`);
 
+  console.log('[Cloudflare STT] 发送音频:', { size: audioBlob.size, mimeType, ext });
+
   try {
     const response = await fetch(STT_API, {
       method: 'POST',
       body: formData,
     });
 
+    console.log('[Cloudflare STT] 响应状态:', response.status);
+
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      return { text: '', success: false, error: errorData.error || `服务器错误 (${response.status})` };
+      const errorText = await response.text();
+      console.error('[Cloudflare STT] 服务器错误:', errorText);
+      let errorMsg = `服务器错误 (${response.status})`;
+      try {
+        const errorData = JSON.parse(errorText);
+        errorMsg = errorData.error || errorMsg;
+      } catch {}
+      return { text: '', success: false, error: errorMsg };
     }
 
     const data = await response.json();
+    console.log('[Cloudflare STT] 识别结果:', data);
     return { text: data.text || '', success: true };
   } catch (err) {
+    console.error('[Cloudflare STT] 网络错误:', err);
     return {
       text: '',
       success: false,
-      error: err instanceof Error ? err.message : '网络连接失败',
+      error: err instanceof Error ? err.message : '网络连接失败，请检查网络后重试',
     };
   }
 }

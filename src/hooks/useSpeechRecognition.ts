@@ -77,42 +77,54 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
     setResult('');
 
     try {
+      console.log('[跟读] 开始录音...');
       const recorder = await startRecording();
+      console.log('[跟读] 录音中，mimeType:', recorder.mimeType);
 
       // 录制 3 秒
       await new Promise((resolve) => setTimeout(resolve, 3000));
 
       const audioBlob = await recorder.stop();
+      console.log('[跟读] 录音结束，大小:', audioBlob.size, 'bytes');
       setIsListening(false);
 
       if (audioBlob.size < 100) {
-        return { correct: false, recognized: '没有检测到语音，请大声读出来！' };
+        console.warn('[跟读] 音频太小，可能麦克风未工作');
+        return { correct: false, recognized: '没有检测到语音，请检查麦克风权限后重试' };
       }
 
+      console.log('[跟读] 发送到 Whisper API...');
       const response = await transcribeAudio(audioBlob);
 
       if (!response.success) {
+        console.error('[跟读] Whisper 识别失败:', response.error);
         return { correct: false, recognized: response.error || '识别失败，请重试' };
       }
 
       const recognizedText = response.text.trim();
       setResult(recognizedText);
+      console.log('[跟读] 识别文本:', recognizedText);
 
       if (!recognizedText) {
         return { correct: false, recognized: '没有识别到语音，请再试一次' };
       }
 
       const correct = compareWords(recognizedText, targetWord);
+      console.log('[跟读] 对比结果:', { recognizedText, targetWord, correct });
       return { correct, recognized: recognizedText };
 
     } catch (err) {
+      console.error('[跟读] 异常:', err);
       setIsListening(false);
       const message = err instanceof Error ? err.message : '录音失败';
       // 检查是否是权限问题
-      if (message.includes('Permission') || message.includes('NotAllowed')) {
+      if (message.includes('Permission') || message.includes('NotAllowed') || message.includes('NotAllowedError')) {
         return { correct: false, recognized: '请允许麦克风权限后重试' };
       }
-      return { correct: false, recognized: message };
+      if (message.includes('NotFound') || message.includes('devices')) {
+        return { correct: false, recognized: '未找到麦克风设备' };
+      }
+      return { correct: false, recognized: `录音失败: ${message}` };
     }
   }, []);
 
