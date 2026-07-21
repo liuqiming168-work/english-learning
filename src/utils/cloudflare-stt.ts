@@ -15,50 +15,76 @@ function getSupportedMimeType(): string {
   for (const t of types) {
     if (MediaRecorder.isTypeSupported(t)) return t;
   }
-  return 'audio/webm'; // 默认
+  return ''; // 让浏览器自己选
 }
 
 // 使用 MediaRecorder 录制音频
 export function startRecording(): Promise<{ stop: () => Promise<Blob>; mimeType: string }> {
   return navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
     const mimeType = getSupportedMimeType();
-    const mediaRecorder = new MediaRecorder(stream, { mimeType });
+    const options: MediaRecorderOptions = {};
+    if (mimeType) options.mimeType = mimeType;
 
+    const mediaRecorder = new MediaRecorder(stream, options);
     const chunks: Blob[] = [];
 
     mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data);
+      if (e.data.size > 0) {
+        chunks.push(e.data);
+      }
     };
 
-    // 每秒收集一次数据（确保及时获取音频数据）
-    mediaRecorder.start(1000);
+    // 不传 timeslice，让 ondataavailable 在 stop() 时触发
+    mediaRecorder.start();
+
+    const actualMimeType = mediaRecorder.mimeType || mimeType || 'audio/webm';
 
     const stop = (): Promise<Blob> => {
       return new Promise((resolve) => {
-        mediaRecorder.onstop = () => {
-          // 停止所有轨道
+        // 设置超时，防止 onstop 永远不触发
+        const timeout = setTimeout(() => {
+          console.warn('[录音] onstop 超时，使用已有数据');
           stream.getTracks().forEach((t) => t.stop());
-          const blob = new Blob(chunks, { type: mimeType });
+          const blob = new Blob(chunks, { type: actualMimeType });
+          resolve(blob);
+        }, 3000);
+
+        mediaRecorder.onstop = () => {
+          clearTimeout(timeout);
+          stream.getTracks().forEach((t) => t.stop());
+          const blob = new Blob(chunks, { type: actualMimeType });
           resolve(blob);
         };
-        // 确保还有数据没写入
+
+        // 先请求剩余数据，再停止
         if (mediaRecorder.state === 'recording') {
           mediaRecorder.requestData();
-          setTimeout(() => mediaRecorder.stop(), 100);
+          // 给 requestData 一点时间，然后 stop
+          setTimeout(() => {
+            if (mediaRecorder.state === 'recording') {
+              mediaRecorder.stop();
+            } else {
+              // 已经停了，手动触发
+              stream.getTracks().forEach((t) => t.stop());
+              const blob = new Blob(chunks, { type: actualMimeType });
+              resolve(blob);
+            }
+          }, 150);
         } else {
-          mediaRecorder.stop();
+          stream.getTracks().forEach((t) => t.stop());
+          const blob = new Blob(chunks, { type: actualMimeType });
+          resolve(blob);
         }
       });
     };
 
-    return { stop, mimeType };
+    return { stop, mimeType: actualMimeType };
   });
 }
 
 // 发送音频到 Cloudflare Whisper API 进行识别
 export async function transcribeAudio(audioBlob: Blob): Promise<{ text: string; success: boolean; error?: string }> {
   const formData = new FormData();
-  // 根据 mimeType 设置合适的文件扩展名
   const mimeType = audioBlob.type;
   const ext = mimeType.includes('mp4') ? 'm4a'
     : mimeType.includes('ogg') ? 'ogg'
@@ -69,10 +95,16 @@ export async function transcribeAudio(audioBlob: Blob): Promise<{ text: string; 
   console.log('[Cloudflare STT] 发送音频:', { size: audioBlob.size, mimeType, ext });
 
   try {
+    // 设置 15 秒超时（AbortController）
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
     const response = await fetch(STT_API, {
       method: 'POST',
       body: formData,
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     console.log('[Cloudflare STT] 响应状态:', response.status);
 
@@ -92,6 +124,9 @@ export async function transcribeAudio(audioBlob: Blob): Promise<{ text: string; 
     return { text: data.text || '', success: true };
   } catch (err) {
     console.error('[Cloudflare STT] 网络错误:', err);
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      return { text: '', success: false, error: '识别超时，请检查网络后重试' };
+    }
     return {
       text: '',
       success: false,
@@ -100,7 +135,7 @@ export async function transcribeAudio(audioBlob: Blob): Promise<{ text: string; 
   }
 }
 
-// 检测是否支持 MediaRecorder（需要录音权限）
+// 检测是否支持 MediaRecorder
 export function isMediaRecorderSupported(): boolean {
   return !!(typeof navigator !== 'undefined' && 'mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices && typeof window.MediaRecorder !== 'undefined');
 }
