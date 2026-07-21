@@ -1,7 +1,10 @@
-// Cloudflare Workers AI Whisper 语音识别
-// 用于移动端（不支持 Web Speech API 时）
+// 硅基流动 SenseVoice 语音识别 API
+// 国内直连，免费额度，支持中英文
 
-const STT_API = 'https://english-stt.liuqiming168.workers.dev';
+// TODO: 在 https://siliconflow.cn 注册后获取 API Key 填入这里
+const SILICONFLOW_API_KEY = 'sk-dhxpgcruymrljkttpftodjjqqctzeiqmoggbhaynkhgeiprf';
+const STT_API = 'https://api.siliconflow.cn/v1/audio/transcriptions';
+const STT_MODEL = 'FunAudioLLM/SenseVoiceSmall';
 
 // 获取浏览器支持的音频 MIME 类型
 function getSupportedMimeType(): string {
@@ -15,7 +18,7 @@ function getSupportedMimeType(): string {
   for (const t of types) {
     if (MediaRecorder.isTypeSupported(t)) return t;
   }
-  return ''; // 让浏览器自己选
+  return '';
 }
 
 // 使用 MediaRecorder 录制音频
@@ -34,14 +37,12 @@ export function startRecording(): Promise<{ stop: () => Promise<Blob>; mimeType:
       }
     };
 
-    // 不传 timeslice，让 ondataavailable 在 stop() 时触发
     mediaRecorder.start();
 
     const actualMimeType = mediaRecorder.mimeType || mimeType || 'audio/webm';
 
     const stop = (): Promise<Blob> => {
       return new Promise((resolve) => {
-        // 设置超时，防止 onstop 永远不触发
         const timeout = setTimeout(() => {
           console.warn('[录音] onstop 超时，使用已有数据');
           stream.getTracks().forEach((t) => t.stop());
@@ -56,15 +57,12 @@ export function startRecording(): Promise<{ stop: () => Promise<Blob>; mimeType:
           resolve(blob);
         };
 
-        // 先请求剩余数据，再停止
         if (mediaRecorder.state === 'recording') {
           mediaRecorder.requestData();
-          // 给 requestData 一点时间，然后 stop
           setTimeout(() => {
             if (mediaRecorder.state === 'recording') {
               mediaRecorder.stop();
             } else {
-              // 已经停了，手动触发
               stream.getTracks().forEach((t) => t.stop());
               const blob = new Blob(chunks, { type: actualMimeType });
               resolve(blob);
@@ -82,8 +80,12 @@ export function startRecording(): Promise<{ stop: () => Promise<Blob>; mimeType:
   });
 }
 
-// 发送音频到 Cloudflare Whisper API 进行识别
+// 发送音频到硅基流动 SenseVoice API 进行识别
 export async function transcribeAudio(audioBlob: Blob): Promise<{ text: string; success: boolean; error?: string }> {
+  if (!SILICONFLOW_API_KEY) {
+    return { text: '', success: false, error: 'API Key 未配置，请在代码中填入硅基流动 API Key' };
+  }
+
   const formData = new FormData();
   const mimeType = audioBlob.type;
   const ext = mimeType.includes('mp4') ? 'm4a'
@@ -91,46 +93,49 @@ export async function transcribeAudio(audioBlob: Blob): Promise<{ text: string; 
     : mimeType.includes('wav') ? 'wav'
     : 'webm';
   formData.append('file', audioBlob, `audio.${ext}`);
+  formData.append('model', STT_MODEL);
 
-  console.log('[Cloudflare STT] 发送音频:', { size: audioBlob.size, mimeType, ext });
+  console.log('[SenseVoice] 发送音频:', { size: audioBlob.size, mimeType, ext });
 
   try {
-    // 设置 15 秒超时（AbortController）
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     const response = await fetch(STT_API, {
       method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SILICONFLOW_API_KEY}`,
+      },
       body: formData,
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
 
-    console.log('[Cloudflare STT] 响应状态:', response.status);
+    console.log('[SenseVoice] 响应状态:', response.status);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[Cloudflare STT] 服务器错误:', errorText);
+      console.error('[SenseVoice] 服务器错误:', errorText);
       let errorMsg = `服务器错误 (${response.status})`;
       try {
         const errorData = JSON.parse(errorText);
-        errorMsg = errorData.error || errorMsg;
+        errorMsg = errorData.message || errorData.error || errorMsg;
       } catch {}
       return { text: '', success: false, error: errorMsg };
     }
 
     const data = await response.json();
-    console.log('[Cloudflare STT] 识别结果:', data);
+    console.log('[SenseVoice] 识别结果:', data);
     return { text: data.text || '', success: true };
   } catch (err) {
-    console.error('[Cloudflare STT] 网络错误:', err);
+    console.error('[SenseVoice] 网络错误:', err);
     if (err instanceof DOMException && err.name === 'AbortError') {
       return { text: '', success: false, error: '识别超时，请检查网络后重试' };
     }
     return {
       text: '',
       success: false,
-      error: err instanceof Error ? err.message : '网络连接失败，请检查网络后重试',
+      error: err instanceof Error ? err.message : '网络连接失败',
     };
   }
 }
