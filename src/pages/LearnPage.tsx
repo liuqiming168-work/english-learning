@@ -163,16 +163,38 @@ const LearnPage: React.FC = () => {
         return;
       }
 
-      // 3. 发送到 Whisper API
+      // 3. 发送到 Whisper API（10秒超时）
       setAiMood('think');
       setAiMessage('识别中...');
 
       const formData = new FormData();
       formData.append('file', audioBlob, 'recording.webm');
 
-      const response = await fetch(STT_API, { method: 'POST', body: formData });
-      const data = await response.json();
-      const recognized = (data.text || '').trim();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+
+      let data;
+      try {
+        const response = await fetch(STT_API, {
+          method: 'POST',
+          body: formData,
+          signal: controller.signal,
+        });
+        data = await response.json();
+      } catch (fetchErr: any) {
+        clearTimeout(timeout);
+        if (fetchErr.name === 'AbortError') {
+          setAiMood('encourage');
+          setAiMessage('识别超时，请检查网络后重试');
+        } else {
+          setAiMood('encourage');
+          setAiMessage('网络错误，请重试');
+        }
+        return;
+      }
+      clearTimeout(timeout);
+
+      const recognized = (data?.text || '').trim();
 
       setRecognizedWord(recognized);
 
