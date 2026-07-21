@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { motion } from 'framer-motion';
 
 interface RecordButtonProps {
@@ -14,24 +14,6 @@ const RecordButton: React.FC<RecordButtonProps> = ({
   onRecord,
   disabled = false,
 }) => {
-  const [countdown, setCountdown] = useState(8);
-
-  useEffect(() => {
-    if (isListening) {
-      setCountdown(8);
-      const timer = setInterval(() => {
-        setCountdown(prev => {
-          if (prev <= 1) {
-            clearInterval(timer);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-      return () => clearInterval(timer);
-    }
-  }, [isListening]);
-
   if (!isSupported) {
     return (
       <div className="record-unsupported">
@@ -58,7 +40,7 @@ const RecordButton: React.FC<RecordButtonProps> = ({
           >
             🎤
           </motion.span>
-          <span>正在听你说... {countdown > 0 ? `${countdown}s` : ''}</span>
+          <span>正在听你说...</span>
         </>
       ) : (
         <>
