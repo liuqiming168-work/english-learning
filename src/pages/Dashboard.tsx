@@ -26,6 +26,7 @@ const Dashboard: React.FC = () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
+      // fallback
       const input = document.createElement('input');
       input.value = shareUrl;
       document.body.appendChild(input);
