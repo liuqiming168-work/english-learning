@@ -1,5 +1,16 @@
 // 语音相关工具函数
 
+// 检测是否为微信浏览器
+export function isWeChatBrowser(): boolean {
+  const ua = navigator.userAgent.toLowerCase();
+  return ua.includes('micromessenger');
+}
+
+// 检测是否为移动端
+export function isMobileDevice(): boolean {
+  return /android|iphone|ipad|ipod|webos/i.test(navigator.userAgent.toLowerCase());
+}
+
 // 检查浏览器是否支持语音识别
 export function isSpeechRecognitionSupported(): boolean {
   return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -10,6 +21,44 @@ export function isSpeechSynthesisSupported(): boolean {
   return !!window.speechSynthesis;
 }
 
+// 检查 TTS 是否实际可用（微信中可能 API 存在但无法出声）
+export async function checkTtsActuallyWorks(): Promise<boolean> {
+  if (!isSpeechSynthesisSupported()) return false;
+
+  // 微信浏览器中 SpeechSynthesis 经常有 API 但无声
+  if (isWeChatBrowser()) {
+    // 尝试播放一个简短测试音
+    return new Promise((resolve) => {
+      try {
+        const utterance = new SpeechSynthesisUtterance('test');
+        utterance.volume = 0; // 静音测试
+        utterance.rate = 2;   // 快速结束
+        let resolved = false;
+        
+        const timeout = setTimeout(() => {
+          if (!resolved) { resolved = true; resolve(false); }
+        }, 3000);
+
+        utterance.onstart = () => {
+          // API 能启动，说明可能可用
+          window.speechSynthesis.cancel();
+          if (!resolved) { resolved = true; clearTimeout(timeout); resolve(true); }
+        };
+        utterance.onerror = () => {
+          if (!resolved) { resolved = true; clearTimeout(timeout); resolve(false); }
+        };
+        utterance.onend = () => {
+          if (!resolved) { resolved = true; clearTimeout(timeout); resolve(true); }
+        };
+        window.speechSynthesis.speak(utterance);
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+  return true;
+}
+
 // 创建语音识别实例
 export function createSpeechRecognition(): SpeechRecognition | null {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -17,7 +66,7 @@ export function createSpeechRecognition(): SpeechRecognition | null {
 
   const recognition = new SpeechRecognition();
   recognition.lang = 'en-US';
-  recognition.interimResults = false;
+  recognition.interimResults = true;   // 开启中间结果，用于检测用户是否在说话
   recognition.maxAlternatives = 3;
   recognition.continuous = false;
   return recognition;
@@ -77,39 +126,108 @@ export function speakWord(text: string): Promise<void> {
       return;
     }
 
-    // 取消任何正在进行的语音
-    window.speechSynthesis.cancel();
+    const synth = window.speechSynthesis;
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
-    utterance.rate = 0.75;   // 比默认慢一点，适合跟读
-    utterance.pitch = 1.05;  // 稍高音调，更像自然女声
-    utterance.volume = 1;
+    // 重要：先取消所有正在进行的语音，清除队列
+    synth.cancel();
 
-    // 选择最佳女声
-    const voice = getBestFemaleVoice();
-    if (voice) {
-      utterance.voice = voice;
-    }
+    // 微信浏览器中需要额外延迟确保 cancel 生效
+    const startSpeaking = () => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-US';
+      utterance.rate = 0.75;   // 比默认慢一点，适合跟读
+      utterance.pitch = 1.05;  // 稍高音调，更像自然女声
+      utterance.volume = 1;
 
-    // voices 可能是异步加载的，如果首次加载为空则重试
-    if (!voice && window.speechSynthesis.getVoices().length === 0) {
-      // 延迟获取 voices（Chrome 需要等 voiceschanged 事件）
-      const handleVoicesChanged = () => {
-        window.speechSynthesis.removeEventListener('voiceschanged', handleVoicesChanged);
-        const retryVoice = getBestFemaleVoice();
-        if (retryVoice) {
-          utterance.voice = retryVoice;
-        }
-        window.speechSynthesis.speak(utterance);
+      // 选择最佳女声
+      const voice = getBestFemaleVoice();
+      if (voice) {
+        utterance.voice = voice;
+      }
+
+      let hasEnded = false;
+
+      utterance.onstart = () => {
+        // TTS 成功启动
       };
-      window.speechSynthesis.addEventListener('voiceschanged', handleVoicesChanged);
+
+      utterance.onend = () => {
+        if (!hasEnded) {
+          hasEnded = true;
+          resolve();
+        }
+      };
+
+      utterance.onerror = (e) => {
+        if (!hasEnded) {
+          hasEnded = true;
+          // 微信中常见 'canceled' 或 'interrupted' 错误
+          // 如果是因为我们主动 cancel 导致的，忽略
+          if (e.error === 'canceled' || e.error === 'interrupted') {
+            // 尝试重新播放
+            setTimeout(() => {
+              const retryUtterance = new SpeechSynthesisUtterance(text);
+              retryUtterance.lang = 'en-US';
+              retryUtterance.rate = 0.75;
+              retryUtterance.pitch = 1.05;
+              retryUtterance.volume = 1;
+              const retryVoice = getBestFemaleVoice();
+              if (retryVoice) retryUtterance.voice = retryVoice;
+              
+              let retryResolved = false;
+              retryUtterance.onend = () => {
+                if (!retryResolved) { retryResolved = true; resolve(); }
+              };
+              retryUtterance.onerror = () => {
+                if (!retryResolved) { retryResolved = true; reject(e); }
+              };
+              // 设置超时防止卡死
+              setTimeout(() => {
+                if (!retryResolved) { retryResolved = true; resolve(); }
+              }, 10000);
+              
+              window.speechSynthesis.speak(retryUtterance);
+            }, 200);
+            return;
+          }
+          reject(e);
+        }
+      };
+
+      // 设置超时防止卡死（微信中 TTS 可能永远不触发 onend）
+      setTimeout(() => {
+        if (!hasEnded) {
+          hasEnded = true;
+          resolve(); // 静默成功，不阻塞用户体验
+        }
+      }, 15000);
+
+      synth.speak(utterance);
+    };
+
+    // voices 可能是异步加载的，如果首次加载为空则等待
+    if (synth.getVoices().length === 0) {
+      const handleVoicesChanged = () => {
+        synth.removeEventListener('voiceschanged', handleVoicesChanged);
+        startSpeaking();
+      };
+      synth.addEventListener('voiceschanged', handleVoicesChanged);
+      
+      // 如果 2 秒内 voices 还没加载，直接开始
+      setTimeout(() => {
+        synth.removeEventListener('voiceschanged', handleVoicesChanged);
+        if (synth.getVoices().length === 0) {
+          startSpeaking();
+        }
+      }, 2000);
+    } else {
+      // 微信浏览器中需要一个小延迟
+      if (isWeChatBrowser()) {
+        setTimeout(startSpeaking, 100);
+      } else {
+        startSpeaking();
+      }
     }
-
-    utterance.onend = () => resolve();
-    utterance.onerror = (e) => reject(e);
-
-    window.speechSynthesis.speak(utterance);
   });
 }
 

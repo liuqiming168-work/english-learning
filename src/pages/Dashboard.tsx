@@ -3,12 +3,14 @@ import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { getTotalWordCount } from '../data/words';
 import { loadProgress } from '../utils/storage';
+import { isWeChatBrowser } from '../utils/speech';
 import ProgressBar from '../components/ProgressBar';
 import type { ProgressData } from '../utils/storage';
 
 const Dashboard: React.FC = () => {
   const [progress, setProgress] = useState<ProgressData>(loadProgress);
   const [copied, setCopied] = useState(false);
+  const isWeChat = isWeChatBrowser();
   const totalWords = getTotalWordCount();
   const completedWords = progress.completedWords.length;
   const reviewWords = progress.reviewWords.length;
@@ -52,6 +54,12 @@ const Dashboard: React.FC = () => {
         <div className="hero-emoji">📖</div>
         <h2>欢迎来到英语学习天地！</h2>
         <p>每天坚持跟读，英语越来越棒！</p>
+        {isWeChat && (
+          <div className="wechat-tts-notice" style={{ marginTop: 12 }}>
+            <span>💡 </span>
+            微信内发音和跟读功能可能受限。建议点击右上角「在浏览器中打开」获得完整体验。
+          </div>
+        )}
       </motion.div>
 
       <div className="dashboard-stats">

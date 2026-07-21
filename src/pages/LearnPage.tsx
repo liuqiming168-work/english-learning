@@ -36,7 +36,7 @@ const LearnPage: React.FC = () => {
   const [aiMessage, setAiMessage] = useState<string | undefined>();
 
   const { isListening, isSupported, checkWord } = useSpeechRecognition();
-  const { isSpeaking, speak } = useSpeechSynthesis();
+  const { isSpeaking, speak, isWeChat } = useSpeechSynthesis();
   const { progress, handleCorrect, handleFailed, handleSentenceCorrect, handleSentenceFailed } = useProgress();
 
   // 当前内容
@@ -244,6 +244,14 @@ const LearnPage: React.FC = () => {
           size="small"
         />
       </div>
+
+      {/* 微信浏览器 TTS 警告 */}
+      {isWeChat && (
+        <div className="wechat-tts-notice">
+          <span>💡 </span>
+          微信内可能无法播放发音。建议点击右上角「在浏览器中打开」获得完整体验。
+        </div>
+      )}
 
       {/* Progress */}
       <ProgressBar
