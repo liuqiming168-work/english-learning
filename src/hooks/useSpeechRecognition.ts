@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { createSpeechRecognition, compareWords, isSpeechRecognitionSupported } from '../utils/speech';
+import { createSpeechRecognition, compareWords, shouldUseWebSpeech, isSpeechRecognitionSupported } from '../utils/speech';
 import { startRecording, transcribeAudio, isMediaRecorderSupported } from '../utils/cloudflare-stt';
 
 interface UseSpeechRecognitionReturn {
@@ -17,14 +17,18 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
   const [result, setResult] = useState('');
   const [error, setError] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const webSpeechSupported = isSpeechRecognitionSupported();
-  const cloudflareSupported = isMediaRecorderSupported();
+
+  // 桌面端且浏览器支持 → Web Speech API
+  // 移动端 → Cloudflare Whisper（Android Chrome Web Speech 有 bug）
+  const useWebSpeech = shouldUseWebSpeech();
+  const webSpeechAvailable = isSpeechRecognitionSupported();
+  const cloudflareAvailable = isMediaRecorderSupported();
 
   // 至少有一种方式可用
-  const isSupported = webSpeechSupported || cloudflareSupported;
+  const isSupported = useWebSpeech ? webSpeechAvailable : cloudflareAvailable;
 
   const startListening = useCallback(() => {
-    if (!webSpeechSupported) {
+    if (!webSpeechAvailable) {
       setError('请使用 Chrome 浏览器');
       return;
     }
@@ -57,7 +61,7 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
       setError('启动语音识别失败，请重试');
       setIsListening(false);
     }
-  }, [webSpeechSupported]);
+  }, [webSpeechAvailable]);
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current) {
@@ -189,14 +193,14 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
       return { correct: false, recognized: '您的浏览器不支持语音识别，请使用 Chrome 浏览器' };
     }
 
-    // 优先使用 Web Speech API（桌面端体验更好）
-    if (webSpeechSupported) {
+    // 桌面端 → Web Speech API
+    if (useWebSpeech) {
       return checkWithWebSpeech(targetWord);
     }
 
-    // 回退到 Cloudflare Whisper（移动端）
+    // 移动端 → Cloudflare Whisper
     return checkWithCloudflare(targetWord);
-  }, [isSupported, webSpeechSupported, checkWithWebSpeech, checkWithCloudflare]);
+  }, [isSupported, useWebSpeech, checkWithWebSpeech, checkWithCloudflare]);
 
   return {
     isListening,

@@ -1,8 +1,19 @@
 // 语音相关工具函数
 
-// 检查浏览器是否支持语音识别
+// 检测是否为移动设备
+export function isMobileDevice(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /Android|iPhone|iPad|iPod|webOS/i.test(navigator.userAgent);
+}
+
+// 检查浏览器是否支持语音识别（且非移动端 — Android Chrome 有 bug）
 export function isSpeechRecognitionSupported(): boolean {
   return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+// 检查是否应使用 Web Speech API（桌面端且浏览器支持）
+export function shouldUseWebSpeech(): boolean {
+  return !isMobileDevice() && isSpeechRecognitionSupported();
 }
 
 // 检查浏览器是否支持语音合成
