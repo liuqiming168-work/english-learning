@@ -657,6 +657,21 @@ button:disabled {
   animation: listeningPulse 1.5s infinite;
 }
 
+/* 移动端按住录音按钮 */
+.btn-record.mobile-record {
+  background: linear-gradient(135deg, var(--success), #00a381);
+  box-shadow: 0 6px 25px rgba(0, 184, 148, 0.4);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+.btn-record.mobile-record.listening {
+  background: linear-gradient(135deg, var(--danger), #E74C3C);
+  box-shadow: 0 6px 25px rgba(255, 107, 107, 0.5);
+  animation: listeningPulse 1.5s infinite;
+}
+
 @keyframes listeningPulse {
   0%, 100% { box-shadow: 0 6px 25px rgba(116, 185, 255, 0.4); }
   50% { box-shadow: 0 6px 40px rgba(116, 185, 255, 0.7); }
