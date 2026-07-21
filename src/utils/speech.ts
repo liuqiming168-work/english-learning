@@ -67,8 +67,8 @@ export function createSpeechRecognition(): SpeechRecognition | null {
   const recognition = new SpeechRecognition();
   recognition.lang = 'en-US';
   recognition.interimResults = true;   // 开启中间结果，用于检测用户是否在说话
-  recognition.maxAlternatives = 3;
-  recognition.continuous = false;
+  recognition.maxAlternatives = 5;     // 更多备选结果
+  recognition.continuous = true;       // 持续监听，不自动停止
   return recognition;
 }
 
