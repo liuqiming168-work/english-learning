@@ -11,6 +11,16 @@ interface UseSpeechRecognitionReturn {
   checkWord: (targetWord: string) => Promise<{ correct: boolean; recognized: string }>;
 }
 
+/**
+ * 语音识别 Hook
+ * 
+ * 安卓兼容策略（关键！）：
+ * - continuous: false — 安卓上 continuous:true 有 Chromium bug
+ *   (crbug.com/41297427)，麦克风会在语音暂停时过早关闭
+ * - 在 onend 中自动重启（最多 5 次），模拟持续监听
+ * - 收集所有中间 + 最终结果，超时后取最佳匹配
+ * - no-speech / aborted / audio-capture 错误静默处理
+ */
 export function useSpeechRecognition(): UseSpeechRecognitionReturn {
   const [isListening, setIsListening] = useState(false);
   const [result, setResult] = useState('');
@@ -23,41 +33,28 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
       setError('您的浏览器不支持语音识别，请使用 Chrome 浏览器');
       return;
     }
-
     const recognition = createSpeechRecognition();
     if (!recognition) return;
-
     recognitionRef.current = recognition;
     setError(null);
     setResult('');
     setIsListening(true);
 
     recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      setResult(transcript);
+      setResult(event.results[0][0].transcript);
     };
-
     recognition.onerror = (event) => {
       setError(`识别出错: ${event.error}`);
       setIsListening(false);
     };
-
     recognition.onend = () => {
       setIsListening(false);
     };
-
-    try {
-      recognition.start();
-    } catch (e) {
-      setError('启动语音识别失败，请重试');
-      setIsListening(false);
-    }
+    try { recognition.start(); } catch { /* ignore */ }
   }, [isSupported]);
 
   const stopListening = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
+    recognitionRef.current?.stop();
     setIsListening(false);
   }, []);
 
@@ -69,170 +66,133 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
       }
 
       let resolved = false;
-      let recognition: SpeechRecognition | null = null;
-
-      // 超时时间：根据内容长度动态调整
-      const wordCount = targetWord.split(/\s+/).length;
-      const SPEECH_TIMEOUT = Math.max(8000, wordCount * 3000); // 至少8秒
-
-      // 收集所有识别结果（中间+最终）
       const allResults: string[] = [];
       let speechDetected = false;
-      let finalResultReceived = false;
+      let restartCount = 0;
+      const MAX_RESTARTS = 5;
+
+      const wordCount = targetWord.split(/\s+/).length;
+      const TOTAL_TIMEOUT = Math.max(10000, wordCount * 3000);
+
+      let globalTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
       const safeResolve = (correct: boolean, recognized: string) => {
         if (resolved) return;
         resolved = true;
+        if (globalTimeoutId) clearTimeout(globalTimeoutId);
         setIsListening(false);
-        try { recognition?.stop(); } catch {}
         resolve({ correct, recognized });
       };
 
-      // 从所有收集到的结果中找最佳匹配
       const findBestMatch = (): { correct: boolean; recognized: string } => {
-        // 最新的结果排前面
-        const reversed = [...allResults].reverse();
-        for (const text of reversed) {
-          if (compareWords(text, targetWord)) {
-            return { correct: true, recognized: text };
+        for (let i = allResults.length - 1; i >= 0; i--) {
+          if (compareWords(allResults[i], targetWord)) {
+            return { correct: true, recognized: allResults[i] };
           }
         }
-        // 返回最后一个结果
         const last = allResults.length > 0 ? allResults[allResults.length - 1] : '';
         return { correct: false, recognized: last || '未识别到语音' };
       };
 
       const startRecognition = () => {
-        recognition = createSpeechRecognition();
+        if (resolved) return;
+
+        const recognition = createSpeechRecognition();
         if (!recognition) {
           safeResolve(false, '无法创建语音识别');
           return;
         }
-
         recognitionRef.current = recognition;
-        setIsListening(true);
-        setError(null);
-        setResult('');
-        allResults.length = 0;
-        speechDetected = false;
-        finalResultReceived = false;
-
-        let timeoutId: ReturnType<typeof setTimeout>;
-
-        // 超时处理
-        timeoutId = setTimeout(() => {
-          if (speechDetected && allResults.length > 0) {
-            const best = findBestMatch();
-            setResult(best.recognized);
-            safeResolve(best.correct, best.recognized);
-          } else {
-            safeResolve(false, '没有检测到语音，请大声读出来！');
-          }
-        }, SPEECH_TIMEOUT);
 
         recognition.onresult = (event) => {
           speechDetected = true;
-
-          // 收集所有结果
           for (let i = 0; i < event.results.length; i++) {
             const r = event.results[i];
             for (let j = 0; j < r.length; j++) {
-              const transcript = r[j].transcript.trim();
-              if (transcript && !allResults.includes(transcript)) {
-                allResults.push(transcript);
-              }
+              const t = r[j].transcript.trim();
+              if (t && !allResults.includes(t)) allResults.push(t);
             }
-
             if (r.isFinal) {
-              finalResultReceived = true;
-              const finalTranscript = r[0].transcript.trim();
-              setResult(finalTranscript);
-
-              // 最终结果到达，检查是否正确
-              if (compareWords(finalTranscript, targetWord)) {
-                clearTimeout(timeoutId);
-                safeResolve(true, finalTranscript);
+              const finalText = r[0].transcript.trim();
+              setResult(finalText);
+              if (compareWords(finalText, targetWord)) {
+                safeResolve(true, finalText);
                 return;
               }
-              // 不正确也不立即判错，等自然结束看有没有更好的 alternative
             }
           }
         };
 
         recognition.onerror = (event) => {
-          // no-speech: 用户没有说话
-          if (event.error === 'no-speech') {
-            if (!speechDetected && !finalResultReceived) {
-              // 确实没检测到语音，不要重试（避免卡死），直接给友好提示
-              clearTimeout(timeoutId);
-              safeResolve(false, '没有检测到语音，请大声读出来！');
-              return;
-            }
-            // 已经有语音了，忽略这个错误
-            return;
+          // 静默处理的错误类型（安卓上频繁出现）
+          if (event.error === 'no-speech' || event.error === 'aborted' || event.error === 'audio-capture') {
+            return; // 交给 onend 处理重启
           }
-
-          // aborted: 可能是用户手动停止或其他原因
-          if (event.error === 'aborted') {
-            if (allResults.length > 0) {
-              clearTimeout(timeoutId);
-              const best = findBestMatch();
-              setResult(best.recognized);
-              safeResolve(best.correct, best.recognized);
-            }
-            return;
-          }
-
-          // 其他真正的错误
-          clearTimeout(timeoutId);
-          const errorMessages: Record<string, string> = {
-            'audio-capture': '无法访问麦克风，请检查浏览器权限设置',
-            'network': '网络连接异常，请检查网络后重试',
-            'not-allowed': '麦克风权限被拒绝，请在浏览器设置中允许麦克风访问',
-            'service-not-allowed': '语音识别服务不可用',
-            'bad-grammar': '识别语法错误',
-            'language-not-supported': '当前浏览器不支持英语语音识别',
+          // 真正的错误
+          const map: Record<string, string> = {
+            'not-allowed': '麦克风权限被拒绝。请在浏览器设置中允许麦克风访问',
+            'network': '网络连接异常，请重试',
+            'service-not-allowed': '语音服务不可用，请重试',
+            'language-not-supported': '浏览器不支持英语语音识别',
           };
-          const message = errorMessages[event.error] || `语音识别出错: ${event.error}`;
-          setError(message);
-          safeResolve(false, message);
+          safeResolve(false, map[event.error] || `识别出错: ${event.error}`);
         };
 
         recognition.onend = () => {
-          // 识别自然结束（语音停顿后自动停止）
-          if (!resolved) {
-            clearTimeout(timeoutId);
-            if (allResults.length > 0) {
-              const best = findBestMatch();
-              setResult(best.recognized);
-              safeResolve(best.correct, best.recognized);
-            } else if (!speechDetected) {
-              safeResolve(false, '没有检测到语音，请大声读出来！');
-            } else {
-              safeResolve(false, '识别结束，请重试');
-            }
+          if (resolved) return;
+
+          // 有语音结果 → 直接判断，不重启
+          if (speechDetected && allResults.length > 0) {
+            const best = findBestMatch();
+            setResult(best.recognized);
+            safeResolve(best.correct, best.recognized);
+            return;
           }
+
+          // 没检测到语音 + 还有重启次数 → 自动重启
+          if (!speechDetected && restartCount < MAX_RESTARTS) {
+            restartCount++;
+            setTimeout(() => { if (!resolved) startRecognition(); }, 150);
+            return;
+          }
+
+          // 超时/耗尽重试
+          safeResolve(false, !speechDetected
+            ? '没有检测到语音，请大声读出来！\n提示：请确保已允许麦克风权限'
+            : '识别超时，请重试');
         };
 
         try {
           recognition.start();
-        } catch (e) {
-          clearTimeout(timeoutId);
-          safeResolve(false, '启动语音识别失败，请重试');
+        } catch {
+          if (restartCount < MAX_RESTARTS) {
+            restartCount++;
+            setTimeout(() => { if (!resolved) startRecognition(); }, 200);
+          } else {
+            safeResolve(false, '启动语音识别失败，请重试');
+          }
         }
       };
 
+      // 全局超时
+      globalTimeoutId = setTimeout(() => {
+        if (resolved) return;
+        try { recognitionRef.current?.abort(); } catch {}
+        if (allResults.length > 0) {
+          const best = findBestMatch();
+          setResult(best.recognized);
+          safeResolve(best.correct, best.recognized);
+        } else {
+          safeResolve(false, '没有检测到语音，请重试');
+        }
+      }, TOTAL_TIMEOUT);
+
+      setIsListening(true);
+      setError(null);
+      setResult('');
       startRecognition();
     });
   }, [isSupported]);
 
-  return {
-    isListening,
-    isSupported,
-    result,
-    error,
-    startListening,
-    stopListening,
-    checkWord,
-  };
+  return { isListening, isSupported, result, error, startListening, stopListening, checkWord };
 }

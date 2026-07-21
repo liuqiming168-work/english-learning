@@ -129,6 +129,20 @@ const LearnPage: React.FC = () => {
       }
       setLocalFailCount(0);
     } else {
+      // 检查是否是系统级错误（如权限、不支持等），不扣分
+      const isSystemError =
+        result.recognized.includes('权限') ||
+        result.recognized.includes('不支持') ||
+        result.recognized.includes('浏览器');
+
+      if (isSystemError) {
+        // 系统错误：显示错误但不当做跟读失败
+        setFeedback('wrong');
+        setAiMood('encourage');
+        setAiMessage(result.recognized);
+        return;
+      }
+
       if (mode === 'words' && currentWord) {
         const addedToReview = handleFailed(currentWord.id);
         setLocalFailCount(getFailCount(currentWord.id));
