@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { createSpeechRecognition, compareWords, isSpeechRecognitionSupported } from '../utils/speech';
+import { startRecording, transcribeAudio, isMediaRecorderSupported } from '../utils/cloudflare-stt';
 
 interface UseSpeechRecognitionReturn {
   isListening: boolean;
@@ -16,11 +17,15 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
   const [result, setResult] = useState('');
   const [error, setError] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const isSupported = isSpeechRecognitionSupported();
+  const webSpeechSupported = isSpeechRecognitionSupported();
+  const cloudflareSupported = isMediaRecorderSupported();
+
+  // 至少有一种方式可用
+  const isSupported = webSpeechSupported || cloudflareSupported;
 
   const startListening = useCallback(() => {
-    if (!isSupported) {
-      setError('您的浏览器不支持语音识别，请使用 Chrome 浏览器');
+    if (!webSpeechSupported) {
+      setError('请使用 Chrome 浏览器');
       return;
     }
 
@@ -52,7 +57,7 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
       setError('启动语音识别失败，请重试');
       setIsListening(false);
     }
-  }, [isSupported]);
+  }, [webSpeechSupported]);
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current) {
@@ -61,13 +66,55 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
     setIsListening(false);
   }, []);
 
-  const checkWord = useCallback((targetWord: string): Promise<{ correct: boolean; recognized: string }> => {
-    return new Promise((resolve) => {
-      if (!isSupported) {
-        resolve({ correct: false, recognized: '浏览器不支持语音识别' });
-        return;
+  // === 使用 Cloudflare Whisper API 进行语音识别 ===
+  const checkWithCloudflare = useCallback(async (targetWord: string): Promise<{ correct: boolean; recognized: string }> => {
+    setIsListening(true);
+    setError(null);
+    setResult('');
+
+    try {
+      const recorder = await startRecording();
+
+      // 录制 3 秒
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+
+      const audioBlob = await recorder.stop();
+      setIsListening(false);
+
+      if (audioBlob.size < 100) {
+        return { correct: false, recognized: '没有检测到语音，请大声读出来！' };
       }
 
+      const response = await transcribeAudio(audioBlob);
+
+      if (!response.success) {
+        return { correct: false, recognized: response.error || '识别失败，请重试' };
+      }
+
+      const recognizedText = response.text.trim();
+      setResult(recognizedText);
+
+      if (!recognizedText) {
+        return { correct: false, recognized: '没有识别到语音，请再试一次' };
+      }
+
+      const correct = compareWords(recognizedText, targetWord);
+      return { correct, recognized: recognizedText };
+
+    } catch (err) {
+      setIsListening(false);
+      const message = err instanceof Error ? err.message : '录音失败';
+      // 检查是否是权限问题
+      if (message.includes('Permission') || message.includes('NotAllowed')) {
+        return { correct: false, recognized: '请允许麦克风权限后重试' };
+      }
+      return { correct: false, recognized: message };
+    }
+  }, []);
+
+  // === 使用 Web Speech API 进行语音识别（桌面端） ===
+  const checkWithWebSpeech = useCallback((targetWord: string): Promise<{ correct: boolean; recognized: string }> => {
+    return new Promise((resolve) => {
       let resolved = false;
       let retried = false;
 
@@ -101,10 +148,8 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
         };
 
         recognition.onerror = (event) => {
-          // no-speech / aborted：还没说话就被中断，重试一次
           if ((event.error === 'no-speech' || event.error === 'aborted') && !retried && !hasResult) {
             retried = true;
-            // 稍等后重试
             setTimeout(() => {
               if (!resolved) tryRecognize();
             }, 200);
@@ -115,7 +160,6 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
         };
 
         recognition.onend = () => {
-          // 如果还没有结果且没重试过 → 重试
           if (!hasResult && !retried && !resolved) {
             retried = true;
             setTimeout(() => {
@@ -137,7 +181,22 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
 
       tryRecognize();
     });
-  }, [isSupported]);
+  }, []);
+
+  // 自动选择：桌面端用 Web Speech API，移动端用 Cloudflare Whisper
+  const checkWord = useCallback(async (targetWord: string): Promise<{ correct: boolean; recognized: string }> => {
+    if (!isSupported) {
+      return { correct: false, recognized: '您的浏览器不支持语音识别，请使用 Chrome 浏览器' };
+    }
+
+    // 优先使用 Web Speech API（桌面端体验更好）
+    if (webSpeechSupported) {
+      return checkWithWebSpeech(targetWord);
+    }
+
+    // 回退到 Cloudflare Whisper（移动端）
+    return checkWithCloudflare(targetWord);
+  }, [isSupported, webSpeechSupported, checkWithWebSpeech, checkWithCloudflare]);
 
   return {
     isListening,
