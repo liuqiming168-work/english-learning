@@ -1,5 +1,11 @@
 // 语音相关工具函数
 
+// 硅基流动 TTS API 配置
+const TTS_API = 'https://api.siliconflow.cn/v1/audio/speech';
+const TTS_KEY = 'sk-dhxpgcruymrljkttpftodjjqqctzeiqmoggbhaynkhgeiprf';
+const TTS_MODEL = 'FunAudioLLM/CosyVoice2-0.5B';
+const TTS_VOICE = 'FunAudioLLM/CosyVoice2-0.5B:anna'; // anna: 自然女声，英语效果好
+
 // 检测是否为移动设备
 export function isMobileDevice(): boolean {
   if (typeof navigator === 'undefined') return false;
@@ -34,87 +40,86 @@ export function createSpeechRecognition(): SpeechRecognition | null {
   return recognition;
 }
 
-// 获取最佳英语女声
-// 按优先级排列：Google 女声 > 系统英语女声 > 默认英语声
-function getBestFemaleVoice(): SpeechSynthesisVoice | null {
-  const voices = window.speechSynthesis.getVoices();
-  if (voices.length === 0) return null;
+// ========== TTS: CosyVoice2 API（优先）+ 浏览器降级 ==========
 
-  // 优先：Google US English 女声（Chrome 内置，最自然）
-  const preferredVoices = [
-    'Google US English',           // Chrome 美式女声
-    'Google UK English Female',    // Chrome 英式女声
-    'Microsoft Zira',              // Windows 美式女声
-    'Samantha',                    // macOS 女声
-    'Karen',                       // macOS 澳式女声
-    'Moira',                       // macOS 爱尔兰女声
-    'Fiona',                       // macOS 苏格兰女声
-    'Veena',                       // macOS 印度女声
-    'Microsoft Susan',             // Windows 英式女声
-    'Microsoft Hazel',             // Windows 英式女声
-  ];
+// 使用 CosyVoice2 API 生成自然语音
+async function speakWithCosyVoice(text: string): Promise<void> {
+  const response = await fetch(TTS_API, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${TTS_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: TTS_MODEL,
+      input: text,
+      voice: TTS_VOICE,
+      response_format: 'mp3',
+      speed: 0.85,  // 稍慢，适合跟读
+      stream: false,
+    }),
+  });
 
-  for (const preferred of preferredVoices) {
-    const match = voices.find(v =>
-      v.name.includes(preferred) && v.lang.startsWith('en')
-    );
-    if (match) return match;
+  if (!response.ok) {
+    throw new Error(`TTS API error: ${response.status}`);
   }
 
-  // 退而求其次：任意 en-US 女声
-  const usFemale = voices.find(v =>
-    v.lang === 'en-US' && v.name.toLowerCase().includes('female')
-  );
-  if (usFemale) return usFemale;
+  const audioBlob = await response.blob();
+  const audioUrl = URL.createObjectURL(audioBlob);
+  const audio = new Audio(audioUrl);
 
-  // 再退：任意英语女声
-  const enFemale = voices.find(v =>
-    v.lang.startsWith('en') && v.name.toLowerCase().includes('female')
-  );
-  if (enFemale) return enFemale;
-
-  // 最后退：任意 en-US 声
-  const usAny = voices.find(v => v.lang === 'en-US');
-  if (usAny) return usAny;
-
-  return voices[0];
+  return new Promise((resolve, reject) => {
+    audio.onended = () => {
+      URL.revokeObjectURL(audioUrl);
+      resolve();
+    };
+    audio.onerror = () => {
+      URL.revokeObjectURL(audioUrl);
+      reject(new Error('播放失败'));
+    };
+    audio.play().catch(reject);
+  });
 }
 
-// 朗读单词或短句
-export function speakWord(text: string): Promise<void> {
+// 浏览器内置 TTS 降级方案
+function speakWithBrowser(text: string): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!isSpeechSynthesisSupported()) {
       reject(new Error('Speech synthesis not supported'));
       return;
     }
 
-    // 取消任何正在进行的语音
     window.speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'en-US';
-    utterance.rate = 0.75;   // 比默认慢一点，适合跟读
-    utterance.pitch = 1.05;  // 稍高音调，更像自然女声
+    utterance.rate = 0.75;
+    utterance.pitch = 1.05;
     utterance.volume = 1;
 
     // 选择最佳女声
-    const voice = getBestFemaleVoice();
-    if (voice) {
-      utterance.voice = voice;
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = [
+      'Google US English', 'Google UK English Female',
+      'Samantha', 'Karen', 'Microsoft Zira',
+    ];
+    for (const p of preferred) {
+      const match = voices.find(v => v.name.includes(p) && v.lang.startsWith('en'));
+      if (match) { utterance.voice = match; break; }
     }
 
-    // voices 可能是异步加载的，如果首次加载为空则重试
-    if (!voice && window.speechSynthesis.getVoices().length === 0) {
-      // 延迟获取 voices（Chrome 需要等 voiceschanged 事件）
-      const handleVoicesChanged = () => {
-        window.speechSynthesis.removeEventListener('voiceschanged', handleVoicesChanged);
-        const retryVoice = getBestFemaleVoice();
-        if (retryVoice) {
-          utterance.voice = retryVoice;
+    // 如果 voices 为空，等待加载
+    if (voices.length === 0) {
+      const handler = () => {
+        window.speechSynthesis.removeEventListener('voiceschanged', handler);
+        const retryVoices = window.speechSynthesis.getVoices();
+        for (const p of preferred) {
+          const match = retryVoices.find(v => v.name.includes(p) && v.lang.startsWith('en'));
+          if (match) { utterance.voice = match; break; }
         }
         window.speechSynthesis.speak(utterance);
       };
-      window.speechSynthesis.addEventListener('voiceschanged', handleVoicesChanged);
+      window.speechSynthesis.addEventListener('voiceschanged', handler);
     }
 
     utterance.onend = () => resolve();
@@ -124,24 +129,36 @@ export function speakWord(text: string): Promise<void> {
   });
 }
 
+// 朗读单词或短句（优先 CosyVoice2，失败降级浏览器 TTS）
+export async function speakWord(text: string): Promise<void> {
+  try {
+    await speakWithCosyVoice(text);
+  } catch {
+    // CosyVoice2 失败，降级到浏览器内置 TTS
+    try {
+      await speakWithBrowser(text);
+    } catch {
+      // 都失败了，忽略
+      console.warn('TTS 播放失败:', text);
+    }
+  }
+}
+
+// ========== 单词比对 ==========
+
 // 比对识别结果与目标单词
-// 使用模糊匹配策略
 export function compareWords(recognized: string, target: string): boolean {
   if (!recognized || !target) return false;
 
-  // 标准化：去除首尾空格、转小写
   const r = recognized.trim().toLowerCase();
   const t = target.trim().toLowerCase();
 
-  // 完全匹配
   if (r === t) return true;
 
-  // 去除标点符号后匹配
   const rClean = r.replace(/[.,!?;:'"]/g, '').trim();
   const tClean = t.replace(/[.,!?;:'"]/g, '').trim();
   if (rClean === tClean) return true;
 
-  // 多词短语：检查是否所有目标词都在识别结果中
   const targetWords = tClean.split(/\s+/);
   const recognizedWords = rClean.split(/\s+/);
 
@@ -152,10 +169,7 @@ export function compareWords(recognized: string, target: string): boolean {
     if (allMatch) return true;
   }
 
-  // 对于单词本身就在识别结果中的情况
   if (recognizedWords.includes(tClean)) return true;
-
-  // 识别结果包含目标词
   if (rClean.includes(tClean)) return true;
 
   return false;
